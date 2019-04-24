@@ -6,11 +6,12 @@ import click
 @click.command()
 @click.argument("info_file")
 @click.argument("country_folder")
-def cli(info_file, country_folder)
+def cli(info_file, country_folder):
 
     all_files = glob.glob(os.path.join(country_folder, "*.xlsx"))
 
     for file_name in all_files:
+        click.echo(file_name)
         xl = Dispatch("Excel.Application")
 
         wb1 = xl.Workbooks.Open(Filename=info_file)

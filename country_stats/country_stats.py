@@ -15,11 +15,20 @@ def cli(iso, adm1, adm2):
     iso_df = read_from_folder(iso)
     iso_df = pd.merge(gadm_df, iso_df, how='inner', on="iso", copy=True).drop(['adm1', "adm1_name", 'adm2', "adm2_name"], axis=1).drop_duplicates().sort_values(by=['iso_name', "threshold"])
 
+    iso_df = iso_df.set_index(["iso", "iso_name", "threshold", "area_ha", "gain_2000_2012_ha", "extent_2000_ha", "extent_2010_ha"] + ["tc_loss_ha_{}".format(year) for year in range(2001,2019)]).iloc[:, :].div(1000000, axis=0)
+    iso_df = iso_df.reset_index()
+
     adm1_df = read_from_folder(adm1)
     adm1_df = pd.merge(gadm_df, adm1_df, how='inner', on=["iso", "adm1"], copy=True).drop(['adm1', 'adm2', "adm2_name"], axis=1).drop_duplicates().sort_values(by=['iso_name', "adm1_name", "threshold"])
 
+    adm1_df = adm1_df.set_index(["iso", "iso_name", "adm1_name", "threshold", "area_ha", "gain_2000_2012_ha", "extent_2000_ha", "extent_2010_ha"] + ["tc_loss_ha_{}".format(year) for year in range(2001,2019)]).iloc[:, :].div(1000000, axis=0)
+    adm1_df = adm1_df.reset_index()
+
     adm2_df = read_from_folder(adm2)
     adm2_df = pd.merge(gadm_df, adm2_df, how='inner', on=["iso", "adm1", "adm2"], copy=True).drop(['adm1', 'adm2'], axis=1).drop_duplicates().sort_values(by=['iso_name', "adm1_name", "adm2_name", "threshold"])
+
+    adm2_df = adm2_df.set_index(["iso", "iso_name", "adm1_name", "adm2_name", "threshold", "area_ha", "gain_2000_2012_ha", "extent_2000_ha", "extent_2010_ha"] + ["tc_loss_ha_{}".format(year) for year in range(2001,2019)]).iloc[:, :].div(1000000, axis=0)
+    adm2_df = adm2_df.reset_index()
 
     countries = gadm_df.iso.unique()
 
