@@ -9,8 +9,9 @@ setup(
         "Click", "pandas", "openpyxl", "pypiwin32"
 
     ],
-    entry_points="""
-        [console_scripts]
-        country_stats=country_stats.country_stats:cli
-    """,
+    entry_points={
+        "console_scripts":
+        ["country_stats=country_stats.country_stats:cli",
+        "insert_info=country_stats.insert_info:cli"]
+},
 )

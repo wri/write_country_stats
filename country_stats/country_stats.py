@@ -62,39 +62,67 @@ def read_from_folder(folder):
 def write_to_excel(iso, *dfs):
 
     tc_col = ["gain_2000_2012_ha"] + ["tc_loss_ha_{}".format(year) for year in range(2001,2019)]
-    biomass_col = ["biomass_Mt", "avg_biomass_per_ha_Mt"]+["biomass_loss_Mt_{}".format(year) for year in range(2001, 2019)]
-    co2_col = ["carbon_Mt"] + ["carbon_emissions_Mt_{}".format(year) for year in range(2001, 2019)]
-    co2_alias = ["co2_Mt"] + ["co2_emissions_Mt_{}".format(year) for year in range(2001, 2019)]
+    biomass_col = ["biomass_Mt", "avg_biomass_per_ha_Mt"]
+    biomass_alias = ["biomass_stock_2000_Mt", "avg_biomass_per_ha_Mt"]
+    biomass_loss = ["biomass_loss_Mt_{}".format(year) for year in range(2001, 2019)]
+    co2_col = ["carbon_Mt"]
+    co2_alias = ["co2_stock_2000_Mt"]
+    co2_loss = ["carbon_emissions_Mt_{}".format(year) for year in range(2001, 2019)]
     area_stats = ["threshold", "area_ha", "extent_2000_ha", "extent_2010_ha"]
 
     gadm = ["iso_name", "adm1_name", "adm2_name"]
     gadm_alias = ["country", "subnational1", "subnational2"]
 
+    tropical_countries = ["ABW", "AGO", "AIA", "ATG", "BDI", "BGD", "BEN", "BFA", "BDG", "BHS", "BLZ", "BOL", "BRA", "BRB", "BRN", "BTN", "BWA", "CAF", "CIV", "CMR", "COD", "COG", "COL", "CRI", "CUB", "CYM", "DJI", "DMA", "DOM", "ECU", "ERI", "ETH", "GAB", "GHA", "GIN", "GLP", "GMB", "GNB", "GNQ", "GRD", "GTM", "GUF", "GUY", "HND", "HTI", "IDN", "IND", "JAM", "KEN", "KHM", "KNA", "LAO", "LBR", "LCA", "LKA", "MDG", "MEX", "MLI", "MMR", "MOZ", "MRT", "MSR", "MTQ", "MWI", "MYS", "NAM", "NER", "NGA", "NIC", "NPL", "PAN", "PER", "PHL", "PLW", "PNG", "PRI", "PRY", "RWA", "SDN", "SEN", "SGP", "SLB", "SLE", "SLV", "SOM", "SUR", "SWZ", "TCA", "TCD", "TGO", "THA", "TLS", "TTO", "TZA", "UGA", "VCT", "VEN", "VGB", "VIR", "VNM", "ZMB", "ZWE"]
 
     with pd.ExcelWriter('{}.xlsx'.format(iso)) as writer:
 
         for df in dfs:
-            if df[1] == "Country":
-                df[0].to_excel(writer, sheet_name=df[1] + " tree cover loss", float_format="%.2f", freeze_panes=(1, 1),
-                               index=False, columns=gadm[:1] + area_stats + tc_col, header=gadm_alias[:1] + area_stats + tc_col)
-                df[0].to_excel(writer, sheet_name=df[1] + " biomass loss", float_format="%.2f", freeze_panes=(1, 1),
-                               index=False, columns=gadm[:1] + area_stats + biomass_col, header=gadm_alias[:1] + area_stats + biomass_col)
-                df[0].to_excel(writer, sheet_name=df[1] + " co2 emissions", float_format="%.2f", freeze_panes=(1, 1),
-                               index=False, columns=gadm[:1] + area_stats + co2_col, header=gadm_alias[:1] + area_stats + co2_alias)
-            elif df[1] == "Subnational 1":
-                df[0].to_excel(writer, sheet_name=df[1] + " tree cover loss", float_format="%.2f", freeze_panes=(1, 1),
-                               index=False, columns=gadm[:2] + area_stats + tc_col, header=gadm_alias[:2] + area_stats + tc_col)
-                df[0].to_excel(writer, sheet_name=df[1] + " biomass loss", float_format="%.2f", freeze_panes=(1, 1),
-                               index=False, columns=gadm[:2] + area_stats + biomass_col, header=gadm_alias[:2] + area_stats + biomass_col)
-                df[0].to_excel(writer, sheet_name=df[1] + " co2 emissions", float_format="%.2f", freeze_panes=(1, 1),
-                               index=False, columns=gadm[:2] + area_stats + co2_col, header=gadm_alias[:2] + area_stats + co2_alias)
+
+            if iso in tropical_countries:
+                if df[1] == "Country":
+                    df[0].to_excel(writer, sheet_name=df[1] + " tree cover loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:1] + area_stats + tc_col, header=gadm_alias[:1] + area_stats + tc_col)
+                    df[0].to_excel(writer, sheet_name=df[1] + " biomass loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:1] + area_stats + biomass_col + biomass_loss, header=gadm_alias[:1] + area_stats + biomass_alias + biomass_loss)
+                    df[0].to_excel(writer, sheet_name=df[1] + " co2 emissions", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:1] + area_stats + co2_col + co2_loss, header=gadm_alias[:1] + area_stats + co2_alias + co2_loss)
+                elif df[1] == "Subnational 1":
+                    df[0].to_excel(writer, sheet_name=df[1] + " tree cover loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:2] + area_stats + tc_col, header=gadm_alias[:2] + area_stats + tc_col)
+                    df[0].to_excel(writer, sheet_name=df[1] + " biomass loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:2] + area_stats + biomass_col + biomass_loss, header=gadm_alias[:2] + area_stats + biomass_alias + biomass_loss)
+                    df[0].to_excel(writer, sheet_name=df[1] + " co2 emissions", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:2] + area_stats + co2_col + co2_loss, header=gadm_alias[:2] + area_stats + co2_alias + co2_loss)
+                else:
+                    df[0].to_excel(writer, sheet_name=df[1] + " tree cover loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm + area_stats + tc_col, header=gadm_alias + area_stats + tc_col)
+                    df[0].to_excel(writer, sheet_name=df[1] + " biomass loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm + area_stats + biomass_col + biomass_loss, header=gadm_alias + area_stats + biomass_alias + biomass_loss)
+                    df[0].to_excel(writer, sheet_name=df[1] + " co2 emissions", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm + area_stats + co2_col + co2_loss, header=gadm_alias + area_stats + co2_alias + co2_loss)
             else:
-                df[0].to_excel(writer, sheet_name=df[1] + " tree cover loss", float_format="%.2f", freeze_panes=(1, 1),
-                               index=False, columns=gadm + area_stats + tc_col, header=gadm_alias + area_stats + tc_col)
-                df[0].to_excel(writer, sheet_name=df[1] + " biomass loss", float_format="%.2f", freeze_panes=(1, 1),
-                               index=False, columns=gadm + area_stats + biomass_col, header=gadm_alias + area_stats + biomass_col)
-                df[0].to_excel(writer, sheet_name=df[1] + " co2 emissions", float_format="%.2f", freeze_panes=(1, 1),
-                               index=False, columns=gadm + area_stats + co2_col, header=gadm_alias + area_stats + co2_alias)
+                if df[1] == "Country":
+                    df[0].to_excel(writer, sheet_name=df[1] + " tree cover loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:1] + area_stats + tc_col, header=gadm_alias[:1] + area_stats + tc_col)
+                    df[0].to_excel(writer, sheet_name=df[1] + " biomass loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:1] + area_stats + biomass_col, header=gadm_alias[:1] + area_stats + biomass_alias)
+                    df[0].to_excel(writer, sheet_name=df[1] + " co2 emissions", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:1] + area_stats + co2_col, header=gadm_alias[:1] + area_stats + co2_alias)
+                elif df[1] == "Subnational 1":
+                    df[0].to_excel(writer, sheet_name=df[1] + " tree cover loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:2] + area_stats + tc_col, header=gadm_alias[:2] + area_stats + tc_col)
+                    df[0].to_excel(writer, sheet_name=df[1] + " biomass loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:2] + area_stats + biomass_col, header=gadm_alias[:2] + area_stats + biomass_alias)
+                    df[0].to_excel(writer, sheet_name=df[1] + " co2 emissions", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm[:2] + area_stats + co2_col, header=gadm_alias[:2] + area_stats + co2_alias)
+                else:
+                    df[0].to_excel(writer, sheet_name=df[1] + " tree cover loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm + area_stats + tc_col, header=gadm_alias + area_stats + tc_col)
+                    df[0].to_excel(writer, sheet_name=df[1] + " biomass loss", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm + area_stats + biomass_col, header=gadm_alias + area_stats + biomass_alias)
+                    df[0].to_excel(writer, sheet_name=df[1] + " co2 emissions", float_format="%.2f", freeze_panes=(1, 1),
+                                   index=False, columns=gadm + area_stats + co2_col, header=gadm_alias + area_stats + co2_alias)
 
 
 if __name__ == "__main__":
