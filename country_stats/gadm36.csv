@@ -1,4 +1,4 @@
-"iso","iso_name","adm1","adm1_name","adm2","adm2_name"
+"country","iso_name","subnational1","adm1_name","subnational2","adm2_name"
 "ABW","Aruba",NULL,NULL,NULL,NULL
 "AFG","Afghanistan",10,"Ghor",1,"Chaghcharan"
 "AFG","Afghanistan",10,"Ghor",2,"Lal Wa Sarjangal"
