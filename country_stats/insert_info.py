@@ -1,24 +1,30 @@
-from win32com.client import Dispatch
+import xlwings as xw
 import glob
 import os
 import click
+import pdb
 
 @click.command()
 @click.argument("info_file")
 @click.argument("country_folder")
 def cli(info_file, country_folder):
-
     all_files = glob.glob(os.path.join(country_folder, "*.xlsx"))
+
+    wb1 = xw.Book(info_file)
+    ws1 = wb1.sheets(1)
 
     for file_name in all_files:
         click.echo(file_name)
-        xl = Dispatch("Excel.Application")
+        wb2 = xw.Book(file_name)
 
-        wb1 = xl.Workbooks.Open(Filename=info_file)
-        wb2 = xl.Workbooks.Open(Filename=file_name)
+        ws1.api.copy_worksheet(before_=wb2.sheets(1).api)
 
-        ws1 = wb1.Worksheets(1)
-        ws1.Copy(Before=wb2.Worksheets(1))
+        wb2.save()
+        wb2.close()
 
-        wb2.Close(SaveChanges=True)
-        xl.Quit()
+    wb1.close()
+    wb1.app.quit()
+
+
+if __name__ == "__main__":
+    cli()

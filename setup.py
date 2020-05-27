@@ -6,7 +6,7 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
-        "Click", "pandas", "openpyxl", "pypiwin32"
+        "Click", "pandas", "openpyxl", "xlwings"
 
     ],
     entry_points={
