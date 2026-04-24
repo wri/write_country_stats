@@ -2,3 +2,5 @@ pandas
 click
 openpyxl
 xlwings
+gdal
+geopandas
