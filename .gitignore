@@ -22,3 +22,6 @@ Thumbs.db
 *.sbx
 *.qix
 *.shp.xml
+results/
+v2024/
+output/

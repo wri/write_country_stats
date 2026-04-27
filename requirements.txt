@@ -2,5 +2,6 @@ pandas
 click
 openpyxl
 xlwings
-gdal
 geopandas
+requests
+tqdm

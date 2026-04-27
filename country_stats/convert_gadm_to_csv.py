@@ -1,4 +1,4 @@
-"""Convert the GADM 4.5 administrative-boundaries shapefile to the flat CSV
+"""Convert the GADM 4.1 administrative-boundaries shapefile to the flat CSV
 schema used by gadm36.csv.
 """
 
@@ -10,7 +10,7 @@ import geopandas as gpd
 import pandas as pd
 
 DEFAULT_SHP = Path(__file__).resolve().parent / "gadm_administrative_boundaries.shp"
-DEFAULT_OUT = Path(__file__).resolve().parent / "gadm_45.csv"
+DEFAULT_OUT = Path(__file__).resolve().parent / "gadm41.csv"
 
 GID_NUM_RE = re.compile(r"(\d+)_\d+$")
 SUFFIX_RE = re.compile(r"_\d+$")
@@ -19,8 +19,8 @@ TRAILING_DIGITS_RE = re.compile(r"(\d+)$")
 SUB1_OVERRIDES = {
     ("CHN", "Hong Kong"): 998,
     ("CHN", "Macau"): 999,
-    ("GBR", "England"): 998,
-    ("GBR", "Scotland"): 999,
+    ("GBR", "England"): 1,
+    ("GBR", "Scotland"): 3,
     ("UKR", "?"): 999,
 }
 
