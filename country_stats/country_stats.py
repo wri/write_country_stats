@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import pandas as pd
 import click
@@ -39,14 +40,14 @@ def _run_per_iso(dataset, version, sql_template, api_key, isos, desc):
 
 
 # --------------------------------------------------------------------------------------
-# SQL builders for gadm__tcl__iso_change / gadm__tcl__adm1_change
+# SQL builders for gadm__tcl__{iso,adm1,adm2}_change
 # --------------------------------------------------------------------------------------
 
 def _build_loss_sql(level, by_driver, primary, iso=None):
     """
     Build a tree-cover-loss SUM(...) GROUP BY query.
 
-    - level: "iso" or "adm1"
+    - level: "iso", "adm1", or "adm2"
     - by_driver: include wri_google_tree_cover_loss_drivers__driver in SELECT/GROUP BY
     - primary: add `is__umd_regional_primary_forest_2001 = true` to WHERE
     - iso: optional per-ISO filter (use a `'{iso}'` placeholder if you need to .format() later)
@@ -54,6 +55,8 @@ def _build_loss_sql(level, by_driver, primary, iso=None):
     grouping = ["iso"]
     if level == "adm1":
         grouping.append("adm1")
+    elif level == "adm2":
+        grouping += ["adm1", "adm2"]
     grouping.append("umd_tree_cover_loss__year")
     if by_driver:
         grouping.append("wri_google_tree_cover_loss_drivers__driver")
@@ -109,12 +112,32 @@ def _attach_adm1_name(df, gadm_df):
     return df.merge(name_lookup, on=["iso", "adm1"], how="inner")
 
 
+def _attach_adm2_name(df, gadm_df):
+    """Inner-merge `iso_name` + `adm1_name` + `adm2_name` onto `df` keyed on (iso, adm1, adm2)."""
+    df = df.dropna(subset=["adm1", "adm2"]).copy()
+    df["adm1"] = df["adm1"].astype("Int64")
+    df["adm2"] = df["adm2"].astype("Int64")
+    name_lookup = (
+        gadm_df[["country", "iso_name", "subnational1", "adm1_name", "subnational2", "adm2_name"]]
+        .drop_duplicates()
+        .rename(columns={"country": "iso", "subnational1": "adm1", "subnational2": "adm2"})
+    )
+    name_lookup["adm1"] = name_lookup["adm1"].astype("Int64")
+    name_lookup["adm2"] = name_lookup["adm2"].astype("Int64")
+    return df.merge(name_lookup, on=["iso", "adm1", "adm2"], how="inner")
+
+
 # --------------------------------------------------------------------------------------
 # Output shapers (raw API rows → tab-ready frames)
+#
+# Every shaper carries an `iso` column (ISO code) into the output frame so per-ISO
+# slicing in cmd_per_iso is uniform: `df[df["iso"] == "BRA"]` works for every shaped
+# frame. The `iso` column is never written to Excel because write_to_excel selects
+# columns by name from SHEET_SPECS, and `iso` isn't listed in any spec.
 # --------------------------------------------------------------------------------------
 
 def _shape_primary_loss_iso(loss_df, area_df, gadm_df, years):
-    cols = ["country", "threshold", "area__ha"] + [f"tc_loss_ha_{y}" for y in years]
+    cols = ["iso", "country", "threshold", "area__ha"] + [f"tc_loss_ha_{y}" for y in years]
     if loss_df.empty:
         return pd.DataFrame(columns=cols)
 
@@ -133,7 +156,7 @@ def _shape_primary_loss_iso(loss_df, area_df, gadm_df, years):
     wide = wide.merge(area_df, on="iso", how="left")
     wide = _attach_iso_name(wide, gadm_df)
 
-    out = wide[["iso_name", "threshold", "area__ha"] + list(years)].copy()
+    out = wide[["iso", "iso_name", "threshold", "area__ha"] + list(years)].copy()
     out = out.rename(columns={"iso_name": "country", **{y: f"tc_loss_ha_{y}" for y in years}})
 
     numeric_cols = ["area__ha"] + [f"tc_loss_ha_{y}" for y in years]
@@ -142,7 +165,7 @@ def _shape_primary_loss_iso(loss_df, area_df, gadm_df, years):
 
 
 def _shape_primary_loss_adm1(loss_df, gadm_df, years):
-    cols = ["country", "subnational1", "threshold"] + [f"tc_loss_ha_{y}" for y in years]
+    cols = ["iso", "country", "subnational1", "threshold"] + [f"tc_loss_ha_{y}" for y in years]
     if loss_df.empty:
         return pd.DataFrame(columns=cols)
 
@@ -160,7 +183,7 @@ def _shape_primary_loss_adm1(loss_df, gadm_df, years):
     merged = _attach_adm1_name(wide, gadm_df)
     merged["threshold"] = 30
 
-    out = merged[["iso_name", "adm1_name", "threshold"] + list(years)].copy()
+    out = merged[["iso", "iso_name", "adm1_name", "threshold"] + list(years)].copy()
     out = out.rename(
         columns={
             "iso_name": "country",
@@ -173,11 +196,55 @@ def _shape_primary_loss_adm1(loss_df, gadm_df, years):
     return out.sort_values(by=["country", "subnational1"]).reset_index(drop=True)
 
 
-def _shape_drivers(df, gadm_df, level):
-    """Long-format driver tab. level in {'iso', 'adm1'}."""
-    base_cols = ["country", "threshold", "driver", "year", "tc_loss_ha"]
+def _shape_primary_loss_adm2(loss_df, gadm_df, years):
+    cols = (
+        ["iso", "country", "subnational1", "subnational2", "threshold"]
+        + [f"tc_loss_ha_{y}" for y in years]
+    )
+    if loss_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    wide = loss_df.pivot_table(
+        index=["iso", "adm1", "adm2"],
+        columns="umd_tree_cover_loss__year",
+        values="umd_tree_cover_loss__ha",
+        fill_value=0,
+    ).reset_index()
+
+    for y in years:
+        if y not in wide.columns:
+            wide[y] = 0
+
+    merged = _attach_adm2_name(wide, gadm_df)
+    merged["threshold"] = 30
+
+    out = merged[["iso", "iso_name", "adm1_name", "adm2_name", "threshold"] + list(years)].copy()
+    out = out.rename(
+        columns={
+            "iso_name": "country",
+            "adm1_name": "subnational1",
+            "adm2_name": "subnational2",
+            **{y: f"tc_loss_ha_{y}" for y in years},
+        }
+    )
+    numeric_cols = [f"tc_loss_ha_{y}" for y in years]
+    out[numeric_cols] = out[numeric_cols].fillna(0).round().astype("Int64")
+    return out.sort_values(by=["country", "subnational1", "subnational2"]).reset_index(drop=True)
+
+
+def _shape_drivers(df, gadm_df, level, exclude_drivers=("Unknown",), exclude_years=()):
+    """
+    Long-format driver tab. level in {'iso', 'adm1', 'adm2'}.
+
+    `exclude_drivers` drops rows whose driver matches any of the given strings
+    (default: drop "Unknown"). `exclude_years` drops rows whose year is in the
+    given iterable (used by the primary-drivers tabs to drop 2001).
+    """
+    base_cols = ["iso", "country", "threshold", "driver", "year", "tc_loss_ha"]
     if level == "adm1":
-        base_cols.insert(1, "subnational1")
+        base_cols.insert(2, "subnational1")
+    elif level == "adm2":
+        base_cols[2:2] = ["subnational1", "subnational2"]
     if df.empty:
         return pd.DataFrame(columns=base_cols)
 
@@ -191,31 +258,52 @@ def _shape_drivers(df, gadm_df, level):
     if level == "iso":
         df = _attach_iso_name(df, gadm_df)
         df["threshold"] = 30
-        out = df[
-            [
-                "iso_name",
-                "threshold",
-                "wri_google_tree_cover_loss_drivers__driver",
-                "umd_tree_cover_loss__year",
-                "umd_tree_cover_loss__ha",
-            ]
-        ].rename(columns=rename)
+        select = [
+            "iso",
+            "iso_name",
+            "threshold",
+            "wri_google_tree_cover_loss_drivers__driver",
+            "umd_tree_cover_loss__year",
+            "umd_tree_cover_loss__ha",
+        ]
         sort_cols = ["country", "year", "driver"]
-    else:  # adm1
+    elif level == "adm1":
         df = _attach_adm1_name(df, gadm_df)
         df["threshold"] = 30
         rename["adm1_name"] = "subnational1"
-        out = df[
-            [
-                "iso_name",
-                "adm1_name",
-                "threshold",
-                "wri_google_tree_cover_loss_drivers__driver",
-                "umd_tree_cover_loss__year",
-                "umd_tree_cover_loss__ha",
-            ]
-        ].rename(columns=rename)
+        select = [
+            "iso",
+            "iso_name",
+            "adm1_name",
+            "threshold",
+            "wri_google_tree_cover_loss_drivers__driver",
+            "umd_tree_cover_loss__year",
+            "umd_tree_cover_loss__ha",
+        ]
         sort_cols = ["country", "subnational1", "year", "driver"]
+    else:  # adm2
+        df = _attach_adm2_name(df, gadm_df)
+        df["threshold"] = 30
+        rename["adm1_name"] = "subnational1"
+        rename["adm2_name"] = "subnational2"
+        select = [
+            "iso",
+            "iso_name",
+            "adm1_name",
+            "adm2_name",
+            "threshold",
+            "wri_google_tree_cover_loss_drivers__driver",
+            "umd_tree_cover_loss__year",
+            "umd_tree_cover_loss__ha",
+        ]
+        sort_cols = ["country", "subnational1", "subnational2", "year", "driver"]
+
+    out = df[select].rename(columns=rename)
+
+    if exclude_drivers:
+        out = out[~out["driver"].isin(exclude_drivers)]
+    if exclude_years:
+        out = out[~out["year"].isin(exclude_years)]
 
     out["tc_loss_ha"] = out["tc_loss_ha"].fillna(0).round().astype("Int64")
     return out.sort_values(by=sort_cols).reset_index(drop=True)
@@ -282,7 +370,7 @@ def fetch_iso_primary_drivers(api_version, api_key, gadm_df):
         bar.update(1)
     if df.empty:
         click.echo("WARNING: ISO primary drivers query returned no rows.", err=True)
-    return _shape_drivers(df, gadm_df, level="iso")
+    return _shape_drivers(df, gadm_df, level="iso", exclude_years=(2001,))
 
 
 def fetch_adm1_primary_drivers(api_version, api_key, gadm_df):
@@ -294,14 +382,126 @@ def fetch_adm1_primary_drivers(api_version, api_key, gadm_df):
     )
     if raw.empty:
         click.echo("WARNING: ADM1 primary drivers queries returned no rows.", err=True)
-    return _shape_drivers(raw, gadm_df, level="adm1")
+    return _shape_drivers(raw, gadm_df, level="adm1", exclude_years=(2001,))
+
+
+def fetch_adm2_primary_loss(api_version, api_key, gadm_df, iso, years):
+    """
+    Subnational-2 primary-forest loss for a single ISO, threshold=30. Wide format.
+
+    Single-call fetch (no progress bar) — invoked from the per-ISO loop in cmd_per_iso.
+    Returns an empty (but correctly-shaped) frame on API errors or missing data.
+    """
+    sql = _build_loss_sql(level="adm2", by_driver=False, primary=True, iso=iso)
+    try:
+        df = _api_query("gadm__tcl__adm2_change", api_version, sql, api_key)
+    except Exception as exc:
+        tqdm.write(f"  [warn] {iso}: adm2 primary-loss query failed: {exc}")
+        df = pd.DataFrame()
+    return _shape_primary_loss_adm2(df, gadm_df, years)
+
+
+def fetch_adm2_drivers(api_version, api_key, gadm_df, iso):
+    """Subnational-2 tree-cover-loss by driver for a single ISO, threshold=30. Long format."""
+    sql = _build_loss_sql(level="adm2", by_driver=True, primary=False, iso=iso)
+    try:
+        df = _api_query("gadm__tcl__adm2_change", api_version, sql, api_key)
+    except Exception as exc:
+        tqdm.write(f"  [warn] {iso}: adm2 drivers query failed: {exc}")
+        df = pd.DataFrame()
+    return _shape_drivers(df, gadm_df, level="adm2")
+
+
+def fetch_adm2_primary_drivers(api_version, api_key, gadm_df, iso):
+    """Subnational-2 primary-forest loss by driver for a single ISO, threshold=30. Long format."""
+    sql = _build_loss_sql(level="adm2", by_driver=True, primary=True, iso=iso)
+    try:
+        df = _api_query("gadm__tcl__adm2_change", api_version, sql, api_key)
+    except Exception as exc:
+        tqdm.write(f"  [warn] {iso}: adm2 primary-drivers query failed: {exc}")
+        df = pd.DataFrame()
+    return _shape_drivers(df, gadm_df, level="adm2", exclude_years=(2001,))
 
 
 # --------------------------------------------------------------------------------------
-# CLI
+# TSV input loaders (rename "country" → "iso" so per-ISO slicing is uniform across
+# every frame in the pipeline)
 # --------------------------------------------------------------------------------------
 
-@click.command()
+def _load_iso_tsv(path, gadm_df):
+    return (
+        pd.merge(gadm_df, pd.read_csv(path, sep="\t"), how="inner", on="country")
+        .drop(["subnational1", "adm1_name", "subnational2", "adm2_name"], axis=1)
+        .drop_duplicates()
+        .sort_values(by=["iso_name", "umd_tree_cover_density_2000__threshold"])
+        .reset_index(drop=True)
+        .rename(columns={"country": "iso"})
+    )
+
+
+def _load_adm1_tsv(path, gadm_df):
+    return (
+        pd.merge(gadm_df, pd.read_csv(path, sep="\t"), how="inner", on=["country", "subnational1"])
+        .drop(["subnational1", "subnational2", "adm2_name"], axis=1)
+        .drop_duplicates()
+        .sort_values(by=["iso_name", "adm1_name", "umd_tree_cover_density_2000__threshold"])
+        .reset_index(drop=True)
+        .rename(columns={"country": "iso"})
+    )
+
+
+def _load_adm2_tsv(path, gadm_df):
+    return (
+        pd.merge(
+            gadm_df,
+            pd.read_csv(path, sep="\t"),
+            how="inner",
+            on=["country", "subnational1", "subnational2"],
+        )
+        .drop(["subnational1", "subnational2"], axis=1)
+        .drop_duplicates()
+        .sort_values(
+            by=["iso_name", "adm1_name", "adm2_name", "umd_tree_cover_density_2000__threshold"]
+        )
+        .reset_index(drop=True)
+        .rename(columns={"country": "iso"})
+    )
+
+
+# --------------------------------------------------------------------------------------
+# Shared CLI plumbing
+# --------------------------------------------------------------------------------------
+
+def _resolve_paths(output_dir, readme_file, script_dir):
+    api_key = os.environ.get("GFW_API_KEY")
+    if not api_key:
+        click.echo("ERROR: GFW_API_KEY env var is not set.", err=True)
+        sys.exit(1)
+    out_dir = output_dir or os.path.join(script_dir, "output")
+    os.makedirs(out_dir, exist_ok=True)
+    if readme_file is None:
+        readme_path = os.path.join(script_dir, "ReadMe.xlsx")
+    elif readme_file == "":
+        readme_path = None
+    else:
+        readme_path = readme_file
+    if readme_path and not os.path.exists(readme_path):
+        click.echo(f"ERROR: readme file not found: {readme_path}", err=True)
+        sys.exit(1)
+    return api_key, out_dir, readme_path
+
+
+# --------------------------------------------------------------------------------------
+# CLI — click group with two subcommands
+# --------------------------------------------------------------------------------------
+
+@click.group()
+def cli():
+    """TCL 2025 download spreadsheet generator."""
+    pass
+
+
+@cli.command("global")
 @click.argument("iso")
 @click.argument("adm1")
 @click.option("--output-dir", default=None, help="Output directory (default: <script_dir>/output)")
@@ -310,36 +510,25 @@ def fetch_adm1_primary_drivers(api_version, api_key, gadm_df):
     default="v20260424",
     help="GFW Data API dataset version for primary-loss / drivers queries",
 )
-def cli(iso, adm1, output_dir, api_version):
-    api_key = os.environ.get("GFW_API_KEY")
-    if not api_key:
-        click.echo("ERROR: GFW_API_KEY env var is not set.", err=True)
-        sys.exit(1)
-
-    path = os.path.dirname(os.path.abspath(__file__))
-    out_dir = output_dir or os.path.join(path, "output")
-    os.makedirs(out_dir, exist_ok=True)
-
-    gadm_df = pd.read_csv(os.path.join(path, "gadm41.csv"))
+@click.option(
+    "--readme-file",
+    default=None,
+    help=(
+        "Path to a .xlsx whose first sheet becomes the leading tab of global.xlsx "
+        "(default: <script_dir>/ReadMe.xlsx; pass empty string to skip)."
+    ),
+)
+def cmd_global(iso, adm1, output_dir, api_version, readme_file):
+    """Write a single output/global.xlsx covering all ISOs."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    api_key, out_dir, readme_path = _resolve_paths(output_dir, readme_file, script_dir)
+    gadm_df = pd.read_csv(os.path.join(script_dir, "gadm41.csv"))
 
     loss_years = list(range(2001, 2026))
     primary_years = list(range(2002, 2026))
 
-    iso_df = (
-        pd.merge(gadm_df, pd.read_csv(iso, sep="\t"), how="inner", on="country")
-        .drop(["subnational1", "adm1_name", "subnational2", "adm2_name"], axis=1)
-        .drop_duplicates()
-        .sort_values(by=["iso_name", "umd_tree_cover_density_2000__threshold"])
-        .reset_index(drop=True)
-    )
-
-    adm1_df = (
-        pd.merge(gadm_df, pd.read_csv(adm1, sep="\t"), how="inner", on=["country", "subnational1"])
-        .drop(["subnational1", "subnational2", "adm2_name"], axis=1)
-        .drop_duplicates()
-        .sort_values(by=["iso_name", "adm1_name", "umd_tree_cover_density_2000__threshold"])
-        .reset_index(drop=True)
-    )
+    iso_df = _load_iso_tsv(iso, gadm_df)
+    adm1_df = _load_adm1_tsv(adm1, gadm_df)
 
     iso_primary_df = fetch_iso_primary_loss(api_version, api_key, gadm_df, primary_years)
     adm1_primary_df = fetch_adm1_primary_loss(api_version, api_key, gadm_df, primary_years)
@@ -348,7 +537,6 @@ def cli(iso, adm1, output_dir, api_version):
     iso_primary_drivers_df = fetch_iso_primary_drivers(api_version, api_key, gadm_df)
     adm1_primary_drivers_df = fetch_adm1_primary_drivers(api_version, api_key, gadm_df)
 
-    # Tab order: tcl → primary → drivers → primary drivers → carbon, for both Country and Subnational 1.
     write_to_excel(
         out_dir,
         "global",
@@ -364,18 +552,136 @@ def cli(iso, adm1, output_dir, api_version):
         (adm1_drivers_df, "Subnational 1 drivers"),
         (adm1_primary_drivers_df, "Subnational 1 primary drivers"),
         (adm1_df, "Subnational 1 carbon"),
+        readme_path=readme_path,
     )
 
     click.echo(f"Wrote {os.path.join(out_dir, 'global.xlsx')}")
 
 
+@cli.command("per-iso")
+@click.argument("iso")
+@click.argument("adm1")
+@click.argument("adm2")
+@click.option("--output-dir", default=None, help="Output directory (default: <script_dir>/output)")
+@click.option(
+    "--api-version",
+    default="v20260424",
+    help="GFW Data API dataset version for primary-loss / drivers queries",
+)
+@click.option(
+    "--readme-file",
+    default=None,
+    help=(
+        "Path to a .xlsx whose first sheet becomes the leading tab of each {ISO}.xlsx "
+        "(default: <script_dir>/ReadMe.xlsx; pass empty string to skip)."
+    ),
+)
+@click.option(
+    "--isos",
+    default=None,
+    help="Comma-separated ISO codes to process (default: all ISOs in gadm41.csv).",
+)
+@click.option(
+    "--skip-existing/--no-skip-existing",
+    default=True,
+    help="Skip ISOs whose output xlsx already exists (default: enabled, for resume).",
+)
+def cmd_per_iso(iso, adm1, adm2, output_dir, api_version, readme_file, isos, skip_existing):
+    """Write one output/{ISO}.xlsx per country, including ReadMe + Country/Subnational 1/2 tabs."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    api_key, out_dir, readme_path = _resolve_paths(output_dir, readme_file, script_dir)
+    gadm_df = pd.read_csv(os.path.join(script_dir, "gadm41.csv"))
+
+    loss_years = list(range(2001, 2026))
+    primary_years = list(range(2002, 2026))
+
+    # Load TSV-derived frames once.
+    click.echo("Loading geotrellis TSVs...")
+    iso_df = _load_iso_tsv(iso, gadm_df)
+    adm1_df = _load_adm1_tsv(adm1, gadm_df)
+    adm2_df = _load_adm2_tsv(adm2, gadm_df)
+
+    # Prefetch all-ISO API frames once.
+    iso_primary_df = fetch_iso_primary_loss(api_version, api_key, gadm_df, primary_years)
+    adm1_primary_df = fetch_adm1_primary_loss(api_version, api_key, gadm_df, primary_years)
+    iso_drivers_df = fetch_iso_drivers(api_version, api_key, gadm_df)
+    adm1_drivers_df = fetch_adm1_drivers(api_version, api_key, gadm_df)
+    iso_primary_drivers_df = fetch_iso_primary_drivers(api_version, api_key, gadm_df)
+    adm1_primary_drivers_df = fetch_adm1_primary_drivers(api_version, api_key, gadm_df)
+
+    # Resolve target ISO list.
+    all_isos = sorted(gadm_df["country"].unique().tolist())
+    if isos:
+        requested = [s.strip() for s in isos.split(",") if s.strip()]
+        unknown = [c for c in requested if c not in all_isos]
+        if unknown:
+            click.echo(f"ERROR: unknown ISO codes: {', '.join(unknown)}", err=True)
+            sys.exit(1)
+        target_isos = requested
+    else:
+        target_isos = all_isos
+
+    written = 0
+    skipped = 0
+    for iso_code in tqdm(target_isos, desc="Per-ISO workbooks", unit="iso"):
+        out_path = os.path.join(out_dir, f"{iso_code}.xlsx")
+        if skip_existing and os.path.exists(out_path):
+            skipped += 1
+            continue
+
+        # Per-ISO adm2 fetches (3 single-call queries).
+        adm2_primary = fetch_adm2_primary_loss(
+            api_version, api_key, gadm_df, iso_code, primary_years
+        )
+        adm2_drivers = fetch_adm2_drivers(api_version, api_key, gadm_df, iso_code)
+        adm2_primary_drivers = fetch_adm2_primary_drivers(api_version, api_key, gadm_df, iso_code)
+
+        def slice_iso(df):
+            return df[df["iso"] == iso_code]
+
+        try:
+            write_to_excel(
+                out_dir,
+                iso_code,
+                loss_years,
+                primary_years,
+                (slice_iso(iso_df), "Country tcl"),
+                (slice_iso(iso_primary_df), "Country primary"),
+                (slice_iso(iso_drivers_df), "Country drivers"),
+                (slice_iso(iso_primary_drivers_df), "Country primary drivers"),
+                (slice_iso(iso_df), "Country carbon"),
+                (slice_iso(adm1_df), "Subnational 1 tcl"),
+                (slice_iso(adm1_primary_df), "Subnational 1 primary"),
+                (slice_iso(adm1_drivers_df), "Subnational 1 drivers"),
+                (slice_iso(adm1_primary_drivers_df), "Subnational 1 primary drivers"),
+                (slice_iso(adm1_df), "Subnational 1 carbon"),
+                (slice_iso(adm2_df), "Subnational 2 tcl"),
+                (adm2_primary, "Subnational 2 primary"),
+                (adm2_drivers, "Subnational 2 drivers"),
+                (adm2_primary_drivers, "Subnational 2 primary drivers"),
+                (slice_iso(adm2_df), "Subnational 2 carbon"),
+                readme_path=readme_path,
+            )
+            written += 1
+        except Exception as exc:
+            # If a write fails partway, remove the half-written file so a later resume retries.
+            if os.path.exists(out_path):
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+            tqdm.write(f"  [error] {iso_code}: write failed: {exc}")
+
+    click.echo(f"Done. Wrote {written}, skipped {skipped} (already existed).")
+
+
 # --------------------------------------------------------------------------------------
-# Excel writer — one specs table drives all 10 sheets
+# Excel writer — one specs table drives all per-tab schemas
 # --------------------------------------------------------------------------------------
 
 def _build_sheet_specs(loss_years, primary_years):
-    tc_col = ["umd_tree_cover_gain__ha"] + [f"umd_tree_cover_loss_{y}__ha" for y in loss_years]
-    tc_col_alias = ["gain_2000-2012_ha"] + [f"tc_loss_ha_{y}" for y in loss_years]
+    tc_col = [f"umd_tree_cover_loss_{y}__ha" for y in loss_years]
+    tc_col_alias = [f"tc_loss_ha_{y}" for y in loss_years]
     carbon_cols = [
         "umd_tree_cover_density_2000__threshold",
         "umd_tree_cover_extent_2000__ha",
@@ -398,6 +704,9 @@ def _build_sheet_specs(loss_years, primary_years):
     primary_loss_cols = [f"tc_loss_ha_{y}" for y in primary_years]
     drivers_cols_country = ["country", "threshold", "driver", "year", "tc_loss_ha"]
     drivers_cols_subn1 = ["country", "subnational1", "threshold", "driver", "year", "tc_loss_ha"]
+    drivers_cols_subn2 = [
+        "country", "subnational1", "subnational2", "threshold", "driver", "year", "tc_loss_ha",
+    ]
 
     return {
         "Country tcl": dict(
@@ -446,14 +755,46 @@ def _build_sheet_specs(loss_years, primary_years):
             header=["country", "subnational1"] + carbon_cols + carbon_emissions_yearly,
             filter_carbon=True,
         ),
+        "Subnational 2 tcl": dict(
+            sheet="Subnational 2 tree cover loss",
+            columns=["iso_name", "adm1_name", "adm2_name"] + area_stats + tc_col,
+            header=["country", "subnational1", "subnational2"] + area_stats_alias + tc_col_alias,
+        ),
+        "Subnational 2 primary": dict(
+            sheet="Subnational 2 primary loss",
+            columns=["country", "subnational1", "subnational2", "threshold"] + primary_loss_cols,
+        ),
+        "Subnational 2 drivers": dict(
+            sheet="Subnational 2 drivers",
+            columns=drivers_cols_subn2,
+        ),
+        "Subnational 2 primary drivers": dict(
+            sheet="Subnational 2 primary drivers",
+            columns=drivers_cols_subn2,
+        ),
+        "Subnational 2 carbon": dict(
+            sheet="Subnational 2 carbon data",
+            columns=["iso_name", "adm1_name", "adm2_name"] + carbon_cols + carbon_emissions_yearly,
+            header=["country", "subnational1", "subnational2"] + carbon_cols + carbon_emissions_yearly,
+            filter_carbon=True,
+        ),
     }
 
 
-def write_to_excel(out_dir, dataset, loss_years, primary_years, *dfs):
+def write_to_excel(out_dir, dataset, loss_years, primary_years, *dfs, readme_path=None):
     specs = _build_sheet_specs(loss_years, primary_years)
     out_path = os.path.join(out_dir, f"{dataset}.xlsx")
 
-    with pd.ExcelWriter(out_path) as writer:
+    if readme_path:
+        # Start the output workbook as a copy of the ReadMe file so its formatting
+        # (merged cells, paragraph wrapping, etc.) is preserved bit-for-bit. We then
+        # append our data sheets — the ReadMe stays first.
+        shutil.copyfile(readme_path, out_path)
+        writer_kwargs = dict(engine="openpyxl", mode="a", if_sheet_exists="error")
+    else:
+        writer_kwargs = dict(engine="openpyxl")
+
+    with pd.ExcelWriter(out_path, **writer_kwargs) as writer:
         for frame, kind in dfs:
             if kind not in specs:
                 raise ValueError(f"Unknown sheet kind: {kind!r}")
