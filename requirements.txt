@@ -2,3 +2,6 @@ pandas
 click
 openpyxl
 xlwings
+geopandas
+requests
+tqdm
